@@ -178,8 +178,8 @@ panic = "unwind"
 [profile.release-perf]
 inherits = "release"
 lto = false
-codegen-units = 16
-incremental = true
+codegen-units = 256
+incremental = false
 
 # Vendored gpui-component fork with Atlas tab styling patches. Keep every
 # gpui-component crate on the same source to avoid duplicate GPUI app types.

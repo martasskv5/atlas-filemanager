@@ -618,6 +618,100 @@ grep -rn "windows::\|winfsp\|atlas_win_space" crates/atlas-ui/src --include="*.r
 
 Run this from the repo root and confirm every remaining hit is either inside a cfg block (verify by checking the surrounding lines) or is not actually Windows code (e.g. `std::os::windows::fs::MetadataExt` — which is illegal to have outside a cfg block).
 
+## Phase 4.9 — Archive extraction context menu
+
+### Motivation
+
+Right-clicking an archive in Atlas currently offers "Open" (browse-in-place via
+`fs/preview/archive.rs`) and "Convert files" (repack to another archive format
+via `convert/`). Neither gives the user the everyday operation they expect
+from any file manager: **extract the archive contents to disk**.
+
+Competing file managers (Nautilus, Thunar, Dolphin, 7-Zip on Windows, WinRAR)
+all expose this as two right-click entries:
+
+- **Extract here** — extract contents next to the archive
+- **Extract to…** — extract into a user-chosen folder
+
+Add both to the Atlas context menu, gated on the selected files being archives.
+
+### What we already have
+
+The core reading side is complete. All four backends exist and are
+`#[cfg]`-gated correctly:
+
+- `crates/atlas-core/src/fs/archive/zip_backend.rs` — native via `zip` crate
+- `crates/atlas-core/src/fs/archive/tar_backend.rs` — native via `tar` +
+  `flate2`/`xz2`/`bzip2`/`zstd` for `.tar.gz`, `.tar.xz`, `.tar.bz2`, `.tar.zst`
+- `crates/atlas-core/src/fs/archive/sevenz_backend.rs` — native via `sevenz-rust2`
+- `crates/atlas-core/src/fs/archive/rar_backend.rs` — via bundled `unrar` (gated
+  behind the `rar` feature; system `unrar` fallback)
+- `crates/atlas-core/src/fs/archive/sanitize.rs` — path traversal guard
+- `crates/atlas-core/src/fs/archive/bomb_guard.rs` — decompression-bomb guard
+- `crates/atlas-core/src/fs/archive/cache.rs` — cache for browse-in-place
+- `crates/atlas-core/src/fs/compress.rs` — the **compress** counterpart
+  (mirror API shape to follow)
+
+These are used today by `fs/preview/archive.rs` for the "browse archive
+without extracting" flow. **Nothing in the current tree calls them for
+write-to-disk extraction.** `convert/native_archive` explicitly repacks
+without extracting (test: `native_archive_repack_preserves_contents_without_extracting`).
+
+### What's missing
+
+1. A public **`extract` API** in `atlas-core` that writes the archive's
+   entries to disk, respecting the existing sanitize + bomb-guard helpers.
+2. An **archive-detection predicate** usable at render time on Linux (the
+   context menu can't shell out). Extension-based, matching what the four
+   backends accept.
+3. **Two context-menu entries** in `atlas-ui` with archive-only visibility.
+4. **Progress + cancellation** plumbing (mirrors `BgResult::OpComplete` used by
+   copy/move today).
+5. **Password prompt** for encrypted `.zip`/`.7z`/`.rar` (single modal,
+   retry-on-failure).
+6. **Conflict handling** (files already exist at the destination).
+
+### Sub-phases
+
+#### 4.9.1 — Core `extract` API (atlas-core)
+
+New public function in `crates/atlas-core/src/fs/archive/mod.rs`:
+
+````rust
+pub struct ExtractOptions {
+    /// Extract into `<dest>/<archive_stem>/` instead of `<dest>/` directly.
+    pub subfolder: bool,
+    /// What to do on conflict (per-entry).
+    pub on_conflict: OnConflict,
+    /// Optional password for encrypted archives.
+    pub password: Option<String>,
+    /// Cancellation handle.
+    pub cancel: Arc<AtomicBool>,
+}
+
+pub enum OnConflict {
+    /// Overwrite the existing file.
+    Overwrite,
+    /// Skip and report in the summary.
+    Skip,
+    /// Abort the whole extraction.
+    Abort,
+}
+
+pub struct ExtractReport {
+    pub extracted: usize,
+    pub skipped: usize,
+    pub bytes_written: u64,
+    pub errors: Vec<(PathBuf, String)>,
+    pub cancelled: bool,
+}
+
+pub async fn extract_archive(
+    archive: &Path,
+    dest_dir: &Path,
+    options: ExtractOptions,
+) -> Result<ExtractReport>;
+
 ---
 
 ## 7. Phase 5 — Windows-Only Crates
@@ -648,7 +742,7 @@ Has a complete `linux_daemon.rs` (Unix socket + ArenaTree index). **No Windows-s
 
 ```bash
 cargo check -p atlas-search-service --target x86_64-unknown-linux-gnu
-```
+````
 
 ---
 
@@ -904,3 +998,356 @@ Run the following manual scenarios on the target machine:
 | Testing & bugfix                                | Ongoing                     |
 
 The single biggest item is **`atlas-core`'s vault FUSE port** — everything else follows the pattern that the codebase already advertises for cross-platform support.
+
+---
+
+# Linux Port — Status & Deviations from the Plan
+
+_Last updated: 2026-11-14, after Phase 3 complete and Phase 4.5 (icons) complete._
+
+## Completed phases
+
+### Phase 0 — Baseline ✓
+
+- `cargo check --workspace` succeeded on Linux with 0 errors at baseline.
+  This was unexpected (the plan assumed it would fail); it accelerated everything.
+- Toolchain: rustc 1.97.1, CachyOS, Linux 7.3.3-1-cachyos, Niri 26.04 Wayland.
+- Dependencies installed: `fuse3 3.18.3`, `ffmpeg n9.0.2`, `lsblk` (util-linux),
+  `udisks2`, plus the standard X/Wayland/Vulkan stack.
+
+### Phase 1 — Cargo gating ✓
+
+- All `[target.'cfg(windows)'.dependencies]` entries were already correct in the tree.
+- **No dependency-move surgery was needed.** What was actually broken:
+    - `crates/atlas-win-space/` and `crates/atlas-icon-extension/` compiled their
+      full bodies on Linux because their `src/lib.rs` and `src/main.rs` had no
+      crate-root `#![cfg(windows)]`. Fixed by adding:
+        - `crates/atlas-win-space/src/lib.rs`: `#![cfg(windows)]`
+        - `crates/atlas-icon-extension/src/main.rs`: `#![cfg(windows)]`, plus a
+          `#[cfg(not(windows))] fn main() { eprintln!(...); exit(1); }`
+    - Root `Cargo.toml` had a ghost `path = "../atlas-win-space"` (one directory
+      above the repo). Fixed to `path = "crates/atlas-win-space"`.
+- **`fuser = "0.15"` + `libc = "0.2"`** added to
+  `[target.'cfg(target_os = "linux")'.dependencies]` in `atlas-core/Cargo.toml`.
+  Verified compiles + links against `libfuse3`. This was the only new Linux dep.
+- Verified with `cargo tree -p atlas-core --target x86_64-unknown-linux-gnu`:
+  no `atlas-win-space`, no `atlas-icon-extension`, no `winfsp`, no `windows v0.61`
+  in the Linux normal graph.
+
+### Phase 2 — atlas-model ✓ (skipped)
+
+No changes needed. `cargo tree -p atlas-model` confirms no runtime deps. All 100+
+tests pass on Linux unchanged.
+
+### Phase 3 — atlas-core ✓ **COMPLETE**
+
+All 8 sub-phases verified. **265 tests pass on Linux, 0 failures, 3 intentionally
+ignored** (manual Trash round-trip, manual model probe, real cloud sidecar).
+
+Key findings per sub-phase:
+
+**3.1 fs/list/paths/desktop_apps** — already correctly `#[cfg]`-gated.
+`list_dir_portable` handles Linux. `linux_thumb.rs` matches the FreeDesktop
+Thumbnail spec (hash test passes). `desktop_apps.rs` parses `.desktop` files
+correctly. Fixes needed: 3 WSL constants (`WSL_CACHE_TTL`, `WSL_READY_TTL`,
+`WSL_ROOT_CACHE`) gated `#[cfg(windows)]`; 3 WSL parsers (`is_user_wsl_distro`,
+`parse_wsl_list_output`, `is_valid_wsl_distro_name`) kept cross-platform with
+`#[allow(dead_code)]` because the tests exercise them on Linux. Two WSL-path
+tests need `#[cfg(windows)]` because `normalize_wsl_unc_path` is a no-op on
+Linux by design (WSL UNC paths are Windows-only).
+
+**3.2 watcher** — Linux `notify`/`inotify` works. The
+`create_modify_rename_remove_emit_ready_metadata_without_rescanning` test passes
+on Linux without modification; it exercises the inotify rename coalescing path.
+
+**3.3 recycle_bin** — FreeDesktop Trash spec fully implemented. Real round-trip
+(`trash::delete` → list → `restore`) verified manually on CachyOS, marked
+`#[ignore]` because it touches `~/.local/share/Trash`.
+
+**3.4 mounts/udisks** — `sysinfo::Disks::new_with_refreshed_list()` returns
+correct data on Linux. `/proc/mounts` parsing filters to real fstypes. `lsblk
+--json` parses real hardware without panicking on CachyOS. **Known issue:** all
+partitions of one NVMe drive show as separate rows in the sidebar (btrfs
+subvolumes), listed under "good to know" below.
+
+**3.5 cleanup** — `mft.rs` added `#![cfg(windows)]` at crate root. `scan.rs`'s
+`maybe_publish` gated `#[cfg(windows)]` (only used from MFT progress callback).
+**Real change**: `policy.rs`'s `user_temp_root()` and `categories()` split into
+platform branches. On Linux, `user_temp_root()` returns `$XDG_CACHE_HOME`
+(`~/.cache`), and `categories()` scans `~/.cache`, not `~/.local/share/Temp`.
+This is the only "real" non-gating change in 3.5 — the plan didn't anticipate it.
+
+**3.6 search** — fully cross-platform already. `service.rs`'s Linux path (Unix
+socket at `$XDG_RUNTIME_DIR/atlas-search.sock`, `UnixStream::connect`,
+`atlas-search-service --console` spawn) works correctly. Added 2 `#[cfg(unix)]`
+tests to `service.rs`. No other changes needed.
+
+**3.7 vault / FUSE** — **the big one**. Implemented `mount_linux.rs` from
+scratch (~600 lines) using `fuser 0.15`. It's a direct translation of the WinFsp
+callbacks: `lookup → Session::resolve`, `getattr → entry`, `readdir → children`,
+`create → create_entry`, `unlink → delete_entry`, `rename → rename_entry`,
+`setattr → resize + set_metadata`, `release → release_entry`. Inodes are
+allocated from an atomic counter (root = 1) with `by_inode` and `by_id` maps.
+Mount point is `$XDG_RUNTIME_DIR/atlas-private-mounts/<uuid>/`.
+
+`vault.rs` changes:
+
+- Added `#[cfg(target_os = "linux")] pub mod mount_linux;`
+- Added `Entry::modified()` and `Entry::attributes()` getters (the fields are
+  `pub(crate)`-private by design; the getters expose them for the mount layer)
+- `install_driver()` on Linux returns
+  `Err("vault_driver_already_installed: FUSE is provided by the system")`
+
+All 11 existing vault tests pass on Linux (crypto, manifest, copy-on-write,
+namespace, symbolic/hard links). The mount itself compiles and mounts; **the
+UI is not yet wired to trigger it** — that's Phase 4.8, currently deferred.
+
+**3.8 cloud/ext** — fully cross-platform already. `rclone` stack is entirely
+HTTP to a local `rclone rcd`; the `windows_mount.rs` is correctly
+`#[cfg(windows)]`-gated. Fixed: `install_mount_support(&self, _progress)` —
+the leading underscore silences the "unused" warning on Linux (the
+`#[cfg(not(windows))]` branch bails). Fixed: `#[cfg_attr(not(windows),
+allow(unused_mut))]` on `let mut child` in `spawn_daemon`.
+
+**Warning sweep at end of Phase 3**: `cargo check -p atlas-core --all-features`
+now produces **zero warnings**.
+
+### Phase 4 — atlas-ui
+
+**4.5 Icons ✓ COMPLETE**
+
+The original plan said "add `~/.local/share/icons` to `find_vscode_theme`."
+That turned out to be a much bigger job than expected because the VSCode theme
+format (`iconDefinitions` + `fileExtensions` + SVG paths) is completely
+different from FreeDesktop (`index.theme` INI + `<size>/<context>/<name>.svg`).
+
+Implemented:
+
+- **New file `crates/atlas-ui/src/freedesktop_icons.rs`**: parses `index.theme`,
+  walks the `Directories=` list, follows `Inherits=` transitively, prefers SVG
+  over PNG, pre-loads every icon name into a `HashMap<String, PathBuf>` at
+  startup. No external crates.
+- **Extended `icon_theme.rs`**: `IconThemeIndex` now carries an optional
+  `fd_theme: Option<Arc<FreedesktopTheme>>`. `find_vscode_theme()` tries
+  FreeDesktop first on Linux; falls through to VSCode theme discovery otherwise.
+  Added `role_key(role)` helper and `fd_named(name)` method.
+- **Extended `icon_loader.rs::request_icon`**: handles three key shapes — `""`
+  (generic file), `"/"` (folder), `"__role__:<name>"` (FreeDesktop role), and
+  plain extension (VSCode theme).
+- **Extended `file_icons.rs`**: `maybe_request_file_icon` no longer
+  `#[cfg(windows)]`-only. On Linux it requests the extension's role key
+  (e.g. `__role__:application-pdf`). `file_icon_fallback` tries the FreeDesktop
+  role first, then the VSCode extension theme, then the liquid-glass icon.
+- **Sidebar drives**: existing `drive_icon()` (Phosphor glyph) now has a
+  FreeDesktop `drive-harddisk` / `drive-removable-media` override when a theme
+  is loaded. On CachyOS the Adwaita `drive-harddisk` icon now renders.
+
+**Discovered**: the "person glyph" on drive rows was **Phosphor's
+`HardDrive` icon at 16px**, not a fallback bug. It reads ambiguously as a
+person silhouette. No code change was needed to switch it — just loading a
+FreeDesktop theme with a proper `drive-harddisk.svg` fixed the visual.
+
+**4.4 Context menu** — already works as-is on Linux (verified via screenshot).
+"Open with" submenu populates from `desktop_apps::apps_for_file`. No changes
+needed.
+
+**4.6 Window chrome** — GPUI's client-side decorations render correctly under
+Niri. No change needed.
+
+**4.7 Clipboard** — **currently broken for cross-app file copy**.
+`wl-paste --list-types` after copying a file in Atlas shows only text formats
+(`text/plain`, `UTF8_STRING`, etc.). No `text/uri-list`, no
+`x-special/gnome-copied-files`. Thunar correctly reports "nothing to paste."
+**Fix pending:** replace `arboard` on Linux with `smithay-clipboard`, which
+supports arbitrary MIME types in a single `wl_data_source`. This is the
+highest-value remaining Phase 4 item.
+
+**4.3 External DnD** — internal DnD works (Atlas pane → Atlas pane).
+**External DnD does not work** because GPUI-ce's Wayland backend doesn't
+implement `wl_data_device`. This is an upstream limitation, not an Atlas bug.
+Options: (a) wait for GPUI-ce, (b) implement `wl_data_device` atop
+`smithay-client-toolkit` in `atlas-ui` (3–5 hours). Deferred — copy/paste is
+the common workflow and once fixed, covers most use cases.
+
+**4.8 Vault UI wiring** — deferred. The FUSE mount works (see 3.7) but no
+button in the UI triggers it. Decision pending: whether the "private folder"
+feature is wanted at all.
+
+## Good to know — operational notes for future contributors
+
+**CachyOS / Niri specifics**
+
+- `$XDG_RUNTIME_DIR` is set by `pam_systemd` on login. Niri inherits it. Vault
+  mount points and the search service socket both live there.
+- `fuse3` is installed by default. `/dev/fuse` is world-readable. No `fuse`
+  group membership needed.
+- `ffmpeg n9.0.2` (in Nov 2026) changed its ASS→SRT text escaping:
+  literal `{` becomes `\{{}` (backslash + literal brace + SRT escape pair),
+  not just `\{`. Test
+  `convert::tests::independent_ffmpeg_reader_checks_native_ass_and_webvtt_when_installed`
+  was updated to handle both.
+- `lsblk --json` on CachyOS with NVMe shows **many partitions per drive**
+  (btrfs subvolumes as separate block device entries with different
+  mountpoints). The sidebar shows each as a separate row. Cosmetic; will be
+  fixed by grouping in `mounts.rs` when relevant. Workaround: user can ignore
+  the extra rows.
+- `xdg-desktop-portal-gtk` is installed and running; `rfd` file pickers work.
+- Niri's `window-rule` for Atlas: none needed. GPUI renders its own chrome and
+  Niri respects it.
+
+**FreeDesktop icon themes**
+
+- CachyOS ships: `hicolor` (mandatory), `Adwaita`, `breeze`, `locolor`,
+  `Flat-Remix-*` variants. **No Papirus** (common on other distros; falls
+  through cleanly).
+- The loader tries (in order): `Papirus`, `Papirus-Dark`, `Adwaita`, `breeze`,
+  `hicolor`. `Adwaita` wins on CachyOS.
+- Icon sizes: Adwaita has `16x16/apps/`, `22x22/apps/`, `scalable/apps/`, etc.
+  The loader prefers `scalable/` (SVG) over sized PNGs automatically. The
+  resulting `MultiResIcon` tiers (32, 64, 128, 256) are rasterized from
+  whichever source it found.
+- Folder icons come from the FreeDesktop `folder` role. On Adwaita this is a
+  blue folder. The app no longer uses the bundled Phosphor folder icon when a
+  FreeDesktop theme is loaded.
+- **Custom themes** placed in `~/.local/share/icons/<Name>/index.theme` will
+  be picked up if named `Papirus` or `Papirus-Dark`. Other custom names can be
+  added to the `load_default()` search list if desired.
+
+**Clipboard (current state, before Phase 4.7)**
+
+- `arboard::Clipboard::set_text()` puts `text/plain` (and its 5 aliases) on
+  the Wayland clipboard. It does **not** support `text/uri-list`,
+  `x-special/gnome-copied-files`, or `x-special/thunar-copied-files`.
+- Consequence: cross-app file copy/paste does not work.
+- Fix path: `smithay-clipboard` crate (Wayland-native, supports arbitrary
+  MIME types, used by cosmic/helix/alacritty). Add as Linux-only dep, replace
+  the Linux clipboard write in `ops.rs`.
+
+**Drag and drop**
+
+- Internal DnD (`AnyDrag` / `ExternalPaths` in GPUI-ce) works between Atlas
+  panes on Linux.
+- External DnD to/from other apps requires GPUI-ce to implement
+  `wl_data_device`. Currently absent. Track upstream at
+  https://github.com/zed-industries/gpui (or the `gpui-ce` fork).
+- Users can work around: copy/paste (once Phase 4.7 fixes it) or "Open With"
+  via the context menu.
+
+**rclone**
+
+- `sidecar.rs::find_existing()` looks in three places: next to the current
+  executable, `$PATH`, and `~/.local/share/atlas/bin/rclone`. On CachyOS,
+  `rclone` from the AUR or `pacman -S rclone` is found via `$PATH` and takes
+  precedence over a managed download.
+- The managed download path is `~/.local/share/atlas/bin/rclone` (uses
+  `dirs::data_dir()`, so follows `$XDG_DATA_HOME` if set).
+- Cloud mounts use `rclone mount` which on Linux uses FUSE internally.
+  Requires `fuse3` (already installed).
+
+**Test suite**
+
+- Run tests with `RUST_MIN_STACK=16777216 cargo test -p atlas-core --lib`.
+  Without the env var, some crypto tests can stack-overflow in debug builds
+  (16 MiB stack required per `CONTRIBUTING.md`).
+- 3 ignored tests touch real user state; run them manually on CachyOS:
+    - `fs::recycle_bin::tests::trash_roundtrip_through_freedesktop` — touches
+      `~/.local/share/Trash`
+    - `fs::preview::model3d::tests::model_probe` — manual probe over local models
+    - `cloud::sidecar_provider::tests::real_cloud_sidecar_round_trip_when_enabled`
+      — requires `ATLAS_CLOUD_EXTENSION_DIR`
+- `cargo check -p atlas-core --all-features` is clean (0 warnings) as of
+  Phase 3 close.
+- `cargo check -p atlas-ui --all-features` has ~67 warnings, all Phase 4
+  cleanup items (dead code, unused imports). Not blockers.
+
+**Bundled vs FreeDesktop icon precedence**
+
+- On Linux with a FreeDesktop theme available, file-type icons come from
+  FreeDesktop. This is a **behavior change** from Windows: Windows uses the
+  shell's icon cache (via `shell_thumb.rs`), Linux uses the icon theme's
+  `.svg`/`.png` files.
+- `IconStyle` setting: `Auto` on Linux routes to FreeDesktop (same as Windows
+  routes to shell icons); `Theme` uses the VSCode icon theme if one is
+  discovered; `Windows` is a no-op on Linux (falls back to Auto).
+- Folder icons use `folder` role from FreeDesktop, not the bundled Phosphor
+  folder. Users who specifically want the Phosphor folder icon can set
+  `IconStyle::Theme` and install a VSCode icon theme in
+  `~/.vscode/extensions/`.
+
+**Known cosmetic issues (not blockers)**
+
+1. Sidebar drive list shows btrfs subvolumes as separate rows. Fix: group by
+   parent block device in `mounts.rs::list_drives_internal`.
+2. `atlas-ui` has 67 warnings — mostly dead code from Windows-only modules
+   (`shell_thumb.rs`, `shell_menu/`, `dnd/windows/`) that should be
+   `#[cfg(windows)]`-gated at the module level. Sweep before ship.
+3. `atlas-ui/src/ui/file_icons.rs:125` — `_path` unused on Linux (in
+   `row_icon_for_entry`'s signature); cosmetic.
+4. `atlas-ui/src/ui/sidebar.rs:1985` — `_windows_theme` unused on Linux (in
+   `prime_drop_zone_thumbnails`); cosmetic.
+
+**Test environment specifics**
+
+- CachyOS on NVMe, RTX 3070, Wayland + Niri. GPUI renders via Vulkan.
+- 22 themes registered by `gpui-component`. Default: "Atlas Light Glass."
+- `atlas-search-service` can be started via `systemctl --user start atlas-search`
+  if a systemd unit is installed (see `docs/linux.md` for the unit file — add
+  it when the search service is packaged).
+- For vault testing (Phase 4.8, if revived), check `$XDG_RUNTIME_DIR` is
+  non-empty; if running under `systemd-run --scope` without `pam_systemd`, it
+  falls back to `/tmp`.
+
+**Build configuration**
+
+`cargo build -p atlas --release` uses `[profile.release]`:
+
+- `lto = "thin"`, `codegen-units = 1`, `opt-level = 3`
+- **First cold build takes 20–40 minutes** on a machine with 16 GB RAM.
+  LTO + 1 CGU on the GPUI/WGPU/Naga tree is the bottleneck, not linking.
+- `debug = "line-tables-only"` is intentional (crash symbolication) — don't
+  change it.
+- Memory pressure matters: with VS Code + browser + music player running,
+  the LTO pass swaps and build time roughly doubles.
+
+**For Phase 4 development, use:**
+
+```bash
+cargo build -p atlas --profile release-perf
+```
+
+`[profile.release-perf]` inherits release but sets `lto = false`, `codegen-units = 16`, `incremental = true`. Build time drops to ~3–5 minutes cold, ~30 seconds incremental. Runtime perf difference for UI testing is imperceptible. Binary at `target/release-perf/atlas`.
+
+_For final packaging_ (release artifact), still use `--release`. Reserve that for when you're about to hand off or upload.
+
+_Optional optimization_: install `mold` and set it as the linker via `.cargo/config.toml`. Cuts link time from 3–5 minutes to 20–30 seconds.
+
+**Deviations from the original plan**
+
+| Plan item                                                          | What happened                                                                                                                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §5.1 "add `~/.local/share/icons` to `find_vscode_theme`"           | Turned out to require a whole new theme parser. Implemented as `freedesktop_icons.rs`.                                                                        |
+| §5.5 "`caps.rs` must be rejected on Linux"                         | `caps.rs` is `#[cfg(windows)]` gated already; nothing needed.                                                                                                 |
+| §5.6 "`volume_index.rs` NTFS-specific"                             | Kept cross-platform — it's an in-memory data structure, doesn't touch NTFS at runtime. The USN/MFT producers are Windows-gated; the index itself is portable. |
+| §5.8 "`ensure_packaged_icon_provider` is Windows-only"             | It already was. No change.                                                                                                                                    |
+| §6.4 "`titlebar = None` on Linux for Niri"                         | GPUI's client-side chrome works correctly under Niri; no change needed.                                                                                       |
+| §7 "Windows-only crates stubbed on Linux"                          | Only `atlas-win-space` and `atlas-icon-extension` needed stubs. `atlas-search-service` has its own Linux daemon (already in `linux_daemon.rs`).               |
+| §11 "DnD into/out of Nautilus works"                               | Deferred — GPUI-ce limitation, not fixable in Atlas alone.                                                                                                    |
+| §11 "Copy file, paste in Nautilus"                                 | Currently broken — this is the clipboard fix we're working on (Phase 4.7).                                                                                    |
+| Total effort estimate: 1–2 weeks for vault FUSE + 1–2 weeks for UI | Vault FUSE took ~1 day of writing `mount_linux.rs` and iterating on `fuser 0.15` API mismatches. UI is ongoing.                                               |
+
+**Where to pick up next**
+
+Phase 4 remaining, in priority order:
+
+1. **4.7 Clipboard** — `smithay-clipboard` for Linux, arbitrary MIME types,
+   `text/uri-list` + `x-special/gnome-copied-files`. ~2 hours.
+2. **Warning sweep** — `#[cfg(windows)]` gate `shell_thumb.rs`, `shell_menu/`,
+   `dnd/windows/` at module level. ~1 hour. Drops `atlas-ui` warnings to
+   ~15.
+3. **`mounts.rs` dedup** — group btrfs subvolumes under parent block device.
+   ~1 hour.
+4. **4.8 Vault UI** — decision pending; wiring the "protect folder" button
+   through `vault::protect` → `mount_linux::Mounted::start`. ~1 hour if
+   wanted.
+5. **External DnD** — blocked on GPUI-ce; file upstream issue, revisit
+   later.

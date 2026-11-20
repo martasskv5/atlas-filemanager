@@ -1,4 +1,3 @@
-[build]
 # sccache is installed on this Windows machine. It caches Rust compile outputs
 # across clean builds, branch switches, and dependency rebuilds.
 # rustc-wrapper = "sccache"
@@ -7,6 +6,13 @@
 # rust-lld ships with the Rust toolchain and is much faster than link.exe for
 # large debug builds. It does not change which code is compiled into the binary.
 linker = "rust-lld.exe"
+
+# Linux: use mold. Much faster than ld.bfd for the GPUI/WGPU link (~20s vs
+# 3–5 minutes). Requires `pacman -S mold clang` on CachyOS.
+# The `clang` driver reads `-fuse-ld=mold` and invokes mold directly.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 [alias]
 # Daily loop: fastest compile, smallest feature surface.
@@ -18,3 +24,11 @@ devperf = "run --features perf-log"
 # Explicit release aliases so final builds stay optimized and intentional.
 rel = "build --release"
 rellean = "build --release --no-default-features"
+# Fast dev-loop release profile: keeps opt-level=3, drops LTO. ~4–6× faster
+# than `rel`, imperceptible runtime difference for UI testing. Binary at
+# target/release-perf/atlas. Use `rel` only for the final ship artifact.
+dev-rel = "build --profile release-perf"
+# Run the release-perf binary directly (no rebuild unless sources changed).
+run-rel = "run --profile release-perf"
+# Symmetric: full release build/run for hand-off artifacts.
+relfull = "run --release"
