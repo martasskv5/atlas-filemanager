@@ -680,8 +680,13 @@ mod tests {
         assert!(!file.exists());
         // Find it in the bin
         let entries = read_recycle_bin(&SortColumn::Name, &SortDir::Asc);
-        let found = entries.iter().find(|e| e.name == "roundtrip.txt").expect("in bin");
-        let recycle_info = found.recycle_info().expect("recycle_info should be present");
+        let found = entries
+            .iter()
+            .find(|e| e.name == "roundtrip.txt")
+            .expect("in bin");
+        let recycle_info = found
+            .recycle_info()
+            .expect("recycle_info should be present");
         restore(
             found.path().to_path_buf(),
             recycle_info.i_file.clone(),

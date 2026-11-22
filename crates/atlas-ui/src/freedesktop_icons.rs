@@ -91,8 +91,9 @@ fn parse_index_theme(path: &Path) -> Option<ThemeHeader> {
                     // We *do* honor the order for lookup preference.
                     for dir in val.split(',') {
                         let dir = dir.trim();
-                        if let Some((_size, _scale, _context, slot)) =
-                            dirs.iter_mut().find(|(_, _, _, path)| path.is_empty() || path.ends_with(dir))
+                        if let Some((_size, _scale, _context, slot)) = dirs
+                            .iter_mut()
+                            .find(|(_, _, _, path)| path.is_empty() || path.ends_with(dir))
                         {
                             let _ = slot;
                         }
@@ -151,8 +152,7 @@ fn index_theme_dir(root: &Path, name: &str) -> Option<(HashMap<String, PathBuf>,
             // Prefer SVG over PNG.
             let replace = match icons.get(stem) {
                 Some(existing) => {
-                    existing.extension().and_then(|e| e.to_str()) != Some("svg")
-                        && ext == "svg"
+                    existing.extension().and_then(|e| e.to_str()) != Some("svg") && ext == "svg"
                 }
                 None => true,
             };

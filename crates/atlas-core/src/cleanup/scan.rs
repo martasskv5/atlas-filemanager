@@ -172,7 +172,7 @@ impl Worker {
                 self.finish();
                 return;
             }
-            self.snapshot.capacity = atlas_win_space::cleanup::capacity(&root);
+            self.snapshot.capacity = super::verified::capacity(&root);
             self.snapshot.fast_scan_available = root
                 .ancestors()
                 .last()
@@ -504,8 +504,8 @@ impl Worker {
             {
                 self.snapshot.limited = true;
             } else {
-                #[cfg(windows)]
-                match atlas_win_space::cleanup::inspect(path) {
+                #[cfg(any(windows, target_os = "linux"))]
+                match super::verified::inspect(path) {
                     Ok(candidate) => {
                         let path_bytes = candidate
                             .ancestors

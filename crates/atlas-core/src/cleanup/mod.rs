@@ -1,5 +1,7 @@
 //! Atlas-owned disk analysis. No external cleaner or shell scripts are executed.
 mod execution;
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_verified;
 #[cfg(windows)]
 mod mft;
 mod policy;
@@ -13,18 +15,24 @@ pub use scan::{ScanJob, ScanMode};
 use std::path::PathBuf;
 pub use tree::{cached_snapshot, invalidate as invalidate_tree};
 
+#[cfg(windows)]
+pub(crate) use atlas_win_space::cleanup as verified;
+/// Identity-verified inspection and deletion of cleanup candidates.
+#[cfg(target_os = "linux")]
+pub(crate) use linux_verified as verified;
+
 /// Open and identify the given files in parallel; files that vanished, are
 /// locked or are otherwise unsafe are simply left out.
 pub fn inspect_candidates(paths: &[PathBuf]) -> Vec<atlas_model::cleanup::CleanupCandidate> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         use rayon::prelude::*;
         paths
             .par_iter()
-            .filter_map(|p| atlas_win_space::cleanup::inspect(p).ok())
+            .filter_map(|p| verified::inspect(p).ok())
             .collect()
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = paths;
         Vec::new()

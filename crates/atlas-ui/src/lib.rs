@@ -45,6 +45,7 @@ pub mod app;
 pub mod assets;
 /// Platform drag-and-drop: neutral types + Windows OLE implementation.
 pub(crate) mod dnd;
+pub mod freedesktop_icons;
 pub(crate) mod icon_theme;
 pub(crate) mod perf;
 #[cfg(windows)]
@@ -57,7 +58,6 @@ pub(crate) mod shell_menu;
 pub(crate) mod shell_thumb;
 pub mod ui;
 pub(crate) mod ui_wake;
-pub mod freedesktop_icons;
 
 use gpui::{px, size, App as GpuiApp, AppContext as _, KeyBinding, WindowBounds, WindowOptions};
 use gpui_component::{Root, ThemeRegistry, TitleBar};
@@ -367,6 +367,12 @@ pub fn run(
                 closing_app
                     .update(cx, |app, cx| {
                         let allowed = app.close_native_vault(false);
+                        // On Linux the view is released with its window, before
+                        // on_app_quit runs, so the session is saved here.
+                        #[cfg(target_os = "linux")]
+                        if allowed {
+                            app.save_on_quit();
+                        }
                         cx.notify();
                         allowed
                     })

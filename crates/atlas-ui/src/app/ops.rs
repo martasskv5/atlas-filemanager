@@ -524,15 +524,26 @@ impl App {
             {
                 let uri_list =
                     crate::dnd::format_uri_list_with_cut(&paths, is_cut).replace('\0', "");
+                #[cfg(target_os = "linux")]
+                let published = linux_clipboard::offer_files(&paths, is_cut, &uri_list);
+                #[cfg(not(target_os = "linux"))]
+                let published = false;
                 if let Ok(mut cb) = arboard::Clipboard::new() {
-                    let _ = cb.set_text(uri_list.clone());
                     #[cfg(target_os = "linux")]
                     {
                         use arboard::{LinuxClipboardKind, SetExtLinux};
+                        // X11 or no data-control protocol: file managers read text/uri-list.
+                        if !published && cb.set().file_list(&paths).is_err() {
+                            let _ = cb.set_text(uri_list.clone());
+                        }
                         let _ = cb
                             .set()
                             .clipboard(LinuxClipboardKind::Primary)
                             .text(uri_list);
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    if !published {
+                        let _ = cb.set_text(uri_list);
                     }
                 }
             }
@@ -1064,5 +1075,53 @@ impl App {
             }
             self.state.ops.undo_stack.undo.push_back(entry);
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux_clipboard {
+    use std::path::PathBuf;
+    use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
+
+    fn source(mime: &str, text: String) -> MimeSource {
+        MimeSource {
+            source: Source::Bytes(text.into_bytes().into_boxed_slice()),
+            mime_type: MimeType::Specific(mime.to_owned()),
+        }
+    }
+
+    /// Puts copied or cut files on the Wayland clipboard in the formats other
+    /// apps read: text/uri-list (file managers), the GNOME and KDE cut markers
+    /// (Nautilus and Dolphin move instead of copy) and plain text (editors).
+    /// Returns false when there is no Wayland session with data-control.
+    pub fn offer_files(paths: &[PathBuf], is_cut: bool, text: &str) -> bool {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return false;
+        }
+        let uris: Vec<String> = paths
+            .iter()
+            .map(|p| crate::dnd::path_to_file_uri(p))
+            .collect();
+        let gnome = format!(
+            "{}\n{}",
+            if is_cut { "cut" } else { "copy" },
+            uris.join("\n")
+        );
+        let sources = vec![
+            source(
+                "text/uri-list",
+                uris.iter().map(|u| format!("{u}\r\n")).collect(),
+            ),
+            source("x-special/gnome-copied-files", gnome),
+            source(
+                "application/x-kde-cutselection",
+                if is_cut { "1" } else { "0" }.into(),
+            ),
+            MimeSource {
+                source: Source::Bytes(text.as_bytes().into()),
+                mime_type: MimeType::Text,
+            },
+        ];
+        Options::new().copy_multi(sources).is_ok()
     }
 }

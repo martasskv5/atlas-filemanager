@@ -33,6 +33,8 @@ pub mod live;
 pub mod mount;
 #[cfg(target_os = "linux")]
 pub mod mount_linux;
+#[cfg(target_os = "linux")]
+pub use mount_linux as mount;
 mod mutable;
 mod names;
 const HEADER: &str = "vault.json";
@@ -98,8 +100,12 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub fn modified(&self) -> u64 { self.modified }
-    pub fn attributes(&self) -> u32 { self.attributes }
+    pub const fn modified(&self) -> u64 {
+        self.modified
+    }
+    pub const fn attributes(&self) -> u32 {
+        self.attributes
+    }
 }
 
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]

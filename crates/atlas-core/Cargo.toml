@@ -94,7 +94,8 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_Fil
 
 # crates/atlas-core/Cargo.toml
 [target.'cfg(target_os = "linux")'.dependencies]
-fuser = "0.15"
+# Pure-Rust mounting through fusermount3 (package fuse3); no libfuse headers to build.
+fuser = { version = "0.15", default-features = false }
 libc = "0.2"
 
 [dev-dependencies]

@@ -1,0 +1,69 @@
+# Builds Atlas from source for Arch Linux and derivatives (CachyOS, EndeavourOS).
+#
+#   cd packaging/linux/arch && makepkg -si
+#
+# Builds the branch in ATLAS_GIT (default: this repository on GitHub). To package
+# a local checkout: ATLAS_GIT="git+file:///path/to/atlas-filemanager#branch=main" makepkg -si
+pkgname=atlas-git
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc='Modern GPU-accelerated file manager built with Rust and GPUI'
+arch=('x86_64')
+url='https://github.com/neondeex/atlas-filemanager'
+license=('AGPL-3.0-or-later')
+# fontconfig, wayland, vulkan-icd-loader and libglvnd are loaded with dlopen by GPUI,
+# so namcap cannot see that they are used.
+depends=('glibc' 'libgcc' 'openssl' 'libxkbcommon' 'libxkbcommon-x11' 'libxcb' 'fontconfig'
+         'wayland' 'vulkan-icd-loader' 'libglvnd' 'ttf-dejavu' 'hicolor-icon-theme')
+makedepends=('git' 'rustup' 'clang' 'pkgconf')
+optdepends=('fuse3: open private folders as a mounted folder'
+            'udisks2: mount and eject removable drives'
+            'xdg-desktop-portal: native file pickers'
+            'xdg-utils: open files with their default application'
+            'ffmpeg: audio and video previews, thumbnails and conversion'
+            'poppler: PDF previews and conversion'
+            'libreoffice-fresh: office document conversion'
+            'pandoc: document conversion'
+            'rclone: cloud drives'
+            '7zip: more archive formats'
+            'unrar: RAR archives')
+provides=('atlas')
+conflicts=('atlas' 'atlas-bin')
+options=('!lto' '!debug')
+source=("atlas::${ATLAS_GIT:-git+https://github.com/martasskv5/atlas-filemanager.git}")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd atlas
+  local version
+  version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+  printf '%s.r%s.g%s' "${version//-/_}" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd atlas
+  # rust-toolchain.toml pins the compiler; rustup installs it on first use.
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+}
+
+build() {
+  cd atlas
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release \
+    -p atlas -p atlas-search-service -p atlas-cloud-extension -p atlas-icon-extension
+}
+
+package() {
+  cd atlas
+  local binary
+  for binary in atlas atlas-search-service atlas-cloud-extension atlas-icon-extension; do
+    install -Dm755 "target/release/$binary" "$pkgdir/usr/bin/$binary"
+  done
+  install -Dm644 packaging/linux/atlas.desktop "$pkgdir/usr/share/applications/atlas.desktop"
+  install -Dm644 packaging/icons/atlas.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/atlas.svg"
+  install -Dm644 packaging/linux/atlas-search.service \
+    "$pkgdir/usr/lib/systemd/user/atlas-search.service"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 legal/THIRD-PARTY-NOTICES.txt "$pkgdir/usr/share/doc/atlas/THIRD-PARTY-NOTICES.txt"
+  install -Dm644 docs/linux.md "$pkgdir/usr/share/doc/atlas/linux.md"
+}

@@ -36,10 +36,14 @@ impl App {
                 .or_else(|| theme.default_folder.clone())
         } else if key.is_empty() {
             theme
-                .fd_named(crate::freedesktop_icons::FreedesktopTheme::for_extension(""))
+                .fd_named(crate::freedesktop_icons::FreedesktopTheme::for_extension(
+                    "",
+                ))
                 .or_else(|| theme.default_file.clone())
         } else if let Some(name) = key.strip_prefix("__role__:") {
-            theme.fd_named(name).or_else(|| theme.default_folder.clone())
+            theme
+                .fd_named(name)
+                .or_else(|| theme.default_folder.clone())
         } else if let Some(name) = key.strip_prefix("__ext_icon__:") {
             // FreeDesktop extension icon: e.g. `__ext_icon__:image-x-generic`
             theme.fd_named(name)

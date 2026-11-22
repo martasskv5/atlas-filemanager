@@ -47,7 +47,8 @@ semver = "1"
 lru = "0.16"
 # gpui's async executor uses smol; `smol::Timer` drives the BgResult drain loop.
 smol = "2"
-arboard = "3"
+# wayland-data-control: the clipboard works on Wayland compositors without XWayland (niri, sway).
+arboard = { version = "3", features = ["wayland-data-control"] }
 dirs.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "ico"] }
 open = "5"
@@ -125,3 +126,7 @@ required-features = ["ui-lab"]
 [[example]]
 name = "cleanup_diagnostic"
 required-features = ["ui-lab"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Offers a file copy in several formats at once on Wayland (file managers, editors).
+wl-clipboard-rs = "0.9"

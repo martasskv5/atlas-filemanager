@@ -584,7 +584,10 @@ fn independent_ffmpeg_reader_checks_native_ass_and_webvtt_when_installed() {
             .replace("\\{", "{")
             .replace("\\}", "}")
             .replace("\\\u{2060}", "\\");
-        assert!(literal.contains("{literal} C:\\Windows"), "{target}: {text}");
+        assert!(
+            literal.contains("{literal} C:\\Windows"),
+            "{target}: {text}"
+        );
     }
 }
 

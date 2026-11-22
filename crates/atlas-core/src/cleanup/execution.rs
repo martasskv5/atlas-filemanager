@@ -236,22 +236,22 @@ fn old_enough(filetime: u64) -> bool {
     })
 }
 fn delete(candidate: &CleanupCandidate) -> io::Result<u64> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
-        atlas_win_space::cleanup::delete_verified(candidate)
+        super::verified::delete_verified(candidate)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = candidate;
         Err(io::Error::other("cleanup_unavailable"))
     }
 }
 fn free(path: &Path) -> Option<u64> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
-        atlas_win_space::cleanup::capacity(path).map(|(_, free)| free)
+        super::verified::capacity(path).map(|(_, free)| free)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = path;
         None
@@ -407,7 +407,7 @@ mod tests {
         )
         .is_err());
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn reviewed_fixture_is_deleted_once_and_cancelled_fixture_survives() {
         let fixture = tempfile::Builder::new()
@@ -422,7 +422,7 @@ mod tests {
             .unwrap()
             .set_modified(SystemTime::now() - Duration::from_secs(8 * 24 * 3600))
             .unwrap();
-        let candidate = atlas_win_space::cleanup::inspect(&file).unwrap();
+        let candidate = super::super::verified::inspect(&file).unwrap();
         let temp_root = fixture.path().to_owned();
         let plan = CleanupPlan {
             version: 1,
@@ -458,7 +458,7 @@ mod tests {
             .join(format!("{}.report.json", fresh.id))
             .is_file());
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn fresh_or_changed_files_are_reported_without_deletion() {
         let fixture = tempfile::Builder::new()
@@ -467,7 +467,7 @@ mod tests {
             .unwrap();
         let file = fixture.path().join("keep.tmp");
         fs::write(&file, b"keep").unwrap();
-        let candidate = atlas_win_space::cleanup::inspect(&file).unwrap();
+        let candidate = super::super::verified::inspect(&file).unwrap();
         let temp_root = fixture.path().to_owned();
         let plan = CleanupPlan {
             version: 1,

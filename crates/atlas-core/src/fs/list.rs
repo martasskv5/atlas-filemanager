@@ -759,6 +759,7 @@ mod tests {
         assert_eq!(preview_len, 256);
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn lists_usr_share_applications() {
         let entries = list_dir(
@@ -767,11 +768,17 @@ mod tests {
             SortColumn::Name,
             SortDir::Asc,
             FolderOrder::Mixed,
-        ).await.unwrap();
-        assert!(!entries.is_empty(), "/usr/share/applications must have .desktop files on CachyOS");
+        )
+        .await
+        .unwrap();
+        assert!(
+            !entries.is_empty(),
+            "/usr/share/applications must have .desktop files on CachyOS"
+        );
         assert!(entries.iter().any(|e| e.name.ends_with(".desktop")));
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn entry_for_path_classifies_symlink_as_symlink() {
         let dir = tempfile::tempdir().unwrap();

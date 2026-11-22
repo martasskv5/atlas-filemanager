@@ -1,0 +1,15 @@
+# Optional: keep the Atlas search index warm for the whole session.
+# Atlas starts the daemon on demand without this unit. Enable it with
+#   systemctl --user enable --now atlas-search.service
+[Unit]
+Description=Atlas file search index
+Documentation=file:///usr/share/doc/atlas/linux.md
+
+[Service]
+ExecStart=/usr/bin/atlas-search-service --console
+Restart=on-failure
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

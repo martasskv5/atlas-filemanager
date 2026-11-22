@@ -879,12 +879,17 @@ This catches any feature-gated code that references Linux-incompatible types.
 
 A crate is "done" when **all** of the following are true on a CachyOS + Niri machine:
 
+Ticked items were verified on 2026-11-17: CI (Ubuntu 24.04 and Windows), a Windows 10
+machine, and a headless Arch Linux VM running the `atlas-git` package under sway and
+Xvfb (`scripts/arch-vm/`). Strict clippy still fails on code that predates the port
+(see CONTRIBUTING.md).
+
 ### `atlas-model`
 
-- [ ] `cargo check -p atlas-model` passes
-- [ ] `cargo test -p atlas-model` passes
+- [x] `cargo check -p atlas-model` passes
+- [x] `cargo test -p atlas-model` passes
 - [ ] `cargo clippy -p atlas-model -- -D warnings` passes
-- [ ] `cargo tree -p atlas-model` shows no `tokio`, `gpui`, `windows`, `winfsp`, `atlas-win-space`
+- [x] `cargo tree -p atlas-model` shows no `tokio`, `gpui`, `windows`, `winfsp`, `atlas-win-space`
 
 ### `atlas-core`
 
@@ -897,33 +902,33 @@ A crate is "done" when **all** of the following are true on a CachyOS + Niri mac
 - [ ] No `grep -rn "atlas_win_space\|winfsp\|windows::" crates/atlas-core/src --include="*.rs"` hits that are outside a `#[cfg(windows)]` block
 - [ ] All Linux-only modules (`fs::desktop_apps`, `fs::udisks`, `preview::linux_thumb`, `vault::mount_linux`) have passing unit tests
 - [ ] The Linux binary can list `/`, `/home`, and `/usr/share/applications` without error
-- [ ] The Linux binary can send a file to trash and restore it
+- [x] The Linux binary can send a file to trash and restore it
 
 ### `atlas-ui`
 
 - [ ] `cargo check -p atlas-ui --all-features` passes on Linux
-- [ ] `cargo test -p atlas-ui --lib` passes
+- [x] `cargo test -p atlas-ui --lib` passes
 - [ ] `grep -rn "windows::\|winfsp\|atlas_win_space\|shell_menu\|shell_thumb" crates/atlas-ui/src --include="*.rs"` returns only hits inside `#[cfg(windows)]` blocks
 - [ ] The binary launches a window under Niri
-- [ ] A folder can be browsed, a file opened with `xdg-open`, a file renamed and trashed via the UI
+- [ ] A folder can be browsed, a file opened with `xdg-open`, a file renamed and trashed via the UI (all but `xdg-open` verified in the VM)
 - [ ] DnD into/out of Nautilus works
 - [ ] Clipboard copy/paste into Nautilus works
 
 ### `atlas-search-service`
 
-- [ ] `cargo check -p atlas-search-service` passes
-- [ ] `cargo test -p atlas-search-service` passes
+- [x] `cargo check -p atlas-search-service` passes
+- [x] `cargo test -p atlas-search-service` passes
 - [ ] Binary responds on `$XDG_RUNTIME_DIR/atlas-search.sock` (already tested ✅)
 
 ### `atlas-cloud-extension`
 
-- [ ] `cargo check -p atlas-cloud-extension` passes
+- [x] `cargo check -p atlas-cloud-extension` passes
 - [ ] `rclone` is discovered from `PATH` or from the bundled path
 
 ### `atlas-win-space`, `atlas-icon-extension`
 
-- [ ] `cargo check -p atlas-win-space --target x86_64-pc-windows-msvc` still passes (Windows-only)
-- [ ] They are absent from the Linux build graph (`cargo tree -p atlas-core -e normal --target x86_64-unknown-linux-gnu` must not list them)
+- [x] `cargo check -p atlas-win-space --target x86_64-pc-windows-msvc` still passes (Windows-only)
+- [x] They are absent from the Linux build graph (`cargo tree -p atlas-core -e normal --target x86_64-unknown-linux-gnu` must not list them)
 
 ---
 
